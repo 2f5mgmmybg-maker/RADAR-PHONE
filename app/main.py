@@ -90,7 +90,7 @@ def require_token(authorization: str | None = Header(default=None)):
 
 
 def digits(value: str) -> str:
-    return re.sub(r"\\D", "", value or "")
+    return re.sub(r"\D", "", value or "")
 
 
 def norm_header(value: Any) -> str:
@@ -115,7 +115,7 @@ def parse_rows(filename: str, raw: bytes) -> list[dict[str, Any]]:
     if suffix == "csv":
         decoded = raw.decode("utf-8-sig", errors="replace")
         try:
-            dialect = csv.Sniffer().sniff(decoded[:4096], delimiters=",;\\t")
+            dialect = csv.Sniffer().sniff(decoded[:4096], delimiters=",;\t")
         except csv.Error:
             dialect = csv.excel
         matrix = list(csv.reader(io.StringIO(decoded), dialect=dialect))
