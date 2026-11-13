@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: radar-phone
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: radar-phone-db
+          property: connectionString
+      - key: RADAR_API_TOKEN
+        generateValue: true
+
+databases:
+  - name: radar-phone-db
+    plan: basic-256mb
