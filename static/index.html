@@ -2,46 +2,51 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#101722">
 <title>RADAR PHONE</title>
 <style>
 :root{color-scheme:dark;font-family:Inter,system-ui,Arial,sans-serif;background:#101722;color:#edf3fb}
 *{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,#101722,#172538);min-height:100vh}
-header{padding:22px 18px;border-bottom:1px solid #2b3d52;display:flex;justify-content:space-between;align-items:center}
-h1{font-size:20px;letter-spacing:2px;margin:0}small,.muted{color:#9eb0c5}
+header{padding:22px 18px;border-bottom:1px solid #2b3d52;display:flex;justify-content:space-between;align-items:center;gap:12px}
+h1{font-size:20px;letter-spacing:2px;margin:0}h2{font-size:17px;margin:0 0 12px}small,.muted{color:#9eb0c5}
 main{max-width:1000px;margin:auto;padding:18px;display:grid;gap:16px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
-.card{background:#1b293a;border:1px solid #30445c;border-radius:15px;padding:17px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.card{background:#1b293a;border:1px solid #30445c;border-radius:15px;padding:17px;min-width:0}
 .metric{font-size:28px;font-weight:700;margin-top:8px}
-button,.file{background:#2879d0;color:white;border:0;border-radius:10px;padding:11px 14px;font-weight:650;cursor:pointer}
+button{background:#2879d0;color:white;border:0;border-radius:10px;padding:11px 14px;font-weight:650;cursor:pointer}
+button:disabled{opacity:.55;cursor:wait}
 input{max-width:100%;background:#101a27;color:#fff;border:1px solid #3b5068;padding:11px;border-radius:9px}
-#call{border-left:4px solid #3d9cff;min-height:95px}
-#contact{white-space:pre-wrap;line-height:1.6;margin-top:12px}
+#call{border-left:4px solid #3d9cff;min-height:90px;margin:0}
+#contact{white-space:pre-wrap;line-height:1.6;margin-top:12px;overflow-wrap:anywhere}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 label{display:block;margin:12px 0 6px}.history{max-height:300px;overflow:auto}
 .entry{padding:10px 0;border-bottom:1px solid #30445c}
-@media(max-width:520px){header{padding:18px 14px}main{padding:12px}}
+#message{overflow-wrap:anywhere}
+@media(max-width:520px){header{padding:18px 14px}main{padding:12px}.card{padding:14px}}
 </style>
 </head>
 <body>
-<header><div><h1>RADAR PHONE</h1><small>Centre de supervision téléphonique</small></div><small id="connection">Connexion…</small></header>
+<header><div><h1>RADAR PHONE</h1><small>Centre de supervision téléphonique</small></div><small id="connection">En attente du jeton</small></header>
 <main>
 <section class="grid">
-<div class="card"><small>Appels affichés</small><div class="metric" id="calls">0</div></div>
-<div class="card"><small>Contacts importés</small><div class="metric" id="count">—</div></div>
-<div class="card"><small>Extensions</small><div class="metric">À connecter</div></div>
+<div class="card"><small>Appels reçus (session)</small><div class="metric" id="calls">0</div></div>
+<div class="card"><small>Contacts dans Dossier contacts</small><div class="metric" id="count">—</div></div>
+<div class="card"><small>Connexion Zoiper</small><div class="metric" style="font-size:18px">À raccorder</div></div>
 </section>
 <section class="card"><h2>Appel entrant</h2><div id="call" class="card"><span class="muted">En attente d'un événement d'appel autorisé…</span></div><div id="contact"></div></section>
-<section class="card"><h2>Dossier contacts</h2><p class="muted">Un seul dossier. Importe plusieurs fichiers CSV ou XLSX : les fiches sont ajoutées au même répertoire.</p>
+<section class="card"><h2>Dossier contacts</h2><p class="muted">Un seul dossier. Plusieurs fichiers CSV ou XLSX peuvent être importés ici. Les numéros déjà présents sont mis à jour au lieu d'être dupliqués.</p>
 <label for="token">Jeton API RADAR PHONE</label><input id="token" type="password" autocomplete="off" placeholder="Jeton configuré sur Render">
+<div class="row" style="margin-top:10px"><button id="connect">Connecter le tableau</button><span class="muted">Le jeton reste dans cette session de navigateur.</span></div>
 <label for="files">Importer des contacts</label><input id="files" type="file" accept=".csv,.xlsx,.xlsm" multiple>
-<div class="row" style="margin-top:12px"><button id="import">Importer les fichiers</button><span id="message" class="muted"></span></div>
+<div class="row" style="margin-top:12px"><button id="import">Importer les fichiers</button><span id="message" class="muted" role="status"></span></div>
 </section>
-<section class="card"><h2>Historique de cette session</h2><div id="history" class="history muted">Aucun appel reçu.</div></section>
-<section class="card"><h2>Connexion téléphonique</h2><p class="muted">Le tableau de bord est prêt à recevoir un événement d'appel via l'API. Zoiper n'est pas encore relié : il faudra une source d'événements compatible (PBX/API opérateur/passerelle). L'état « Registered » seul ne fournit pas les appels à cette application.</p></section>
+<section class="card"><h2>Historique des appels</h2><div id="history" class="history muted">Aucun appel enregistré.</div></section>
+<section class="card"><h2>Connexion téléphonique</h2><p class="muted">Le tableau est prêt à recevoir les événements d'appel par API. Zoiper n'est pas encore relié : il faut une source d'événements compatible (PBX/API opérateur/passerelle autorisée). Le statut « Registered » du compte SIP ne transmet pas, à lui seul, les appels à cette application.</p></section>
 </main>
 <script>
-const $=id=>document.getElementById(id);let total=0;
-function auth(){return {Authorization:'Bearer '+$('token').value}}
+const $=id=>document.getElementById(id);let total=0, socket=null;
+function auth(){return {Authorization:'Bearer '+$('token').value.trim()}}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function showCall(data){
  total++;$('calls').textContent=total;
  $('call').innerHTML='<strong>Appel entrant</strong><div style="font-size:22px;margin-top:8px">'+escapeHtml(data.phone)+'</div>';
@@ -52,21 +57,41 @@ function showCall(data){
   'Commune : '+(c.commune||'—'),'Date de naissance : '+(c.birth_date||'—'),
   ...Object.entries(c.extra||{}).map(([k,v])=>k+' : '+v)
  ].join('\n'):'Aucune fiche correspondante dans Dossier contacts.';
- const item=document.createElement('div');item.className='entry';item.textContent=new Date().toLocaleTimeString()+' — '+data.phone;
- $('history').prepend(item);
+ const item=document.createElement('div');item.className='entry';item.textContent=new Date().toLocaleString()+' — '+data.phone;$('history').prepend(item);
 }
-function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function loadData(){
+ const r=await fetch('/api/contacts/count',{headers:auth()});if(!r.ok)throw new Error((await r.json()).detail||'Erreur API');
+ $('count').textContent=(await r.json()).count;
+ const h=await fetch('/api/calls/history?limit=50',{headers:auth()});if(!h.ok)throw new Error('Historique indisponible');
+ const items=await h.json();$('history').textContent='';
+ if(!items.length)$('history').textContent='Aucun appel enregistré.';
+ items.forEach(e=>{const el=document.createElement('div');el.className='entry';el.textContent=new Date(e.created_at).toLocaleString()+' — '+e.phone;$('history').append(el);});
+}
+function connect(){
+ const token=$('token').value.trim();if(!token){$('connection').textContent='Jeton requis';return;}
+ if(socket)socket.close();
+ const proto=location.protocol==='https:'?'wss':'ws';
+ socket=new WebSocket(proto+'://'+location.host+'/ws/calls',['radar-phone',token]);
+ socket.onopen=()=>{$('connection').textContent='En direct';sessionStorage.setItem('radarPhoneToken',token);};
+ socket.onclose=()=>{$('connection').textContent='Déconnecté';};
+ socket.onerror=()=>{$('connection').textContent='Erreur de connexion';};
+ socket.onmessage=e=>{try{showCall(JSON.parse(e.data))}catch{}};
+}
+$('connect').onclick=async()=>{try{await loadData();connect();}catch(e){$('message').textContent=e.message;}};
 $('import').onclick=async()=>{
  const files=[...$('files').files];if(!files.length){$('message').textContent='Choisis au moins un fichier.';return;}
- if(!$('token').value){$('message').textContent='Renseigne le jeton API.';return;}
- for(const file of files){const form=new FormData();form.append('file',file);
-  try{const r=await fetch('/api/contacts/import',{method:'POST',headers:auth(),body:form});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Erreur');$('message').textContent=file.name+' : '+data.imported+' contacts importés';}
-  catch(e){$('message').textContent=file.name+' : '+e.message;return;}
- }
- loadCount();
+ if(!$('token').value.trim()){$('message').textContent='Renseigne le jeton API.';return;}
+ $('import').disabled=true;
+ try{
+  for(const file of files){const form=new FormData();form.append('file',file);
+   const r=await fetch('/api/contacts/import',{method:'POST',headers:auth(),body:form});const data=await r.json();
+   if(!r.ok)throw new Error(file.name+' : '+(data.detail||'Erreur'));
+   $('message').textContent=file.name+' : '+data.imported+' ajoutés, '+data.updated+' mis à jour, '+data.skipped+' ignorés';
+  }
+  await loadData();
+ }catch(e){$('message').textContent=e.message;}
+ finally{$('import').disabled=false;}
 };
-async function loadCount(){if(!$('token').value)return;try{const r=await fetch('/api/contacts/count',{headers:auth()});if(r.ok){const d=await r.json();$('count').textContent=d.count;}}catch{}}
-function connect(){const token=$('token').value;if(!token){$('connection').textContent='Jeton requis';return;}const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(proto+'://'+location.host+'/ws/calls',['radar-phone',token]);ws.onopen=()=>$('connection').textContent='Événements connectés';ws.onclose=()=>{$('connection').textContent='Connexion fermée — vérifie le jeton';};ws.onerror=()=>ws.close();ws.onmessage=e=>{try{showCall(JSON.parse(e.data))}catch{}}}
-$('token').addEventListener('change',()=>{loadCount();connect();});
+const saved=sessionStorage.getItem('radarPhoneToken');if(saved){$('token').value=saved;$('connect').click();}
 </script>
 </body></html>
