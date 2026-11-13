@@ -11,6 +11,7 @@ Tableau de supervision téléphonique avec un seul répertoire **Dossier contact
 - Mise à jour d'une fiche existante lorsque le même numéro est réimporté, plutôt que création systématique d'un doublon.
 - Recherche exacte du contact lors de la réception d'un événement d'appel.
 - Historique des événements reçus et diffusion en direct par WebSocket.
+- Base SQLite simple, stockée dans un seul fichier sur le disque persistant Render.
 - Vérification automatisée de la syntaxe Python et du démarrage de l'API via GitHub Actions.
 
 ## Limite importante : Zoiper
@@ -27,7 +28,7 @@ Tableau de supervision téléphonique avec un seul répertoire **Dossier contact
 
 ## Render
 
-Le fichier `render.yaml` configure un service web, le démarrage sur le port fourni par Render (`$PORT`), le contrôle de santé `/health`, une base PostgreSQL et un jeton généré. Après déploiement, vérifier dans Render que la base a bien été créée et que `DATABASE_URL` et `RADAR_API_TOKEN` sont présents. Le fichier YAML ne prouve pas à lui seul que le service Render existant utilise ces réglages.
+Le fichier `render.yaml` configure un seul service web Python, un disque persistant de 1 Go monté sur `/var/data`, une base SQLite (`/var/data/radar_phone.db`) et un jeton généré. Il n'y a plus de service PostgreSQL séparé ni de pilote PostgreSQL à installer. Le disque persistant Render nécessite une offre compatible. Après déploiement, vérifier que le disque est bien attaché au service et que `DATABASE_URL` et `RADAR_API_TOKEN` sont présents.
 
 ## API d'événement d'appel
 
