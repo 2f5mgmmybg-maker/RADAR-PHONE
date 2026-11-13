@@ -5,14 +5,12 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
+    disk:
+      name: radar-phone-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: radar-phone-db
-          property: connectionString
+        value: sqlite:////var/data/radar_phone.db
       - key: RADAR_API_TOKEN
         generateValue: true
-
-databases:
-  - name: radar-phone-db
-    plan: basic-256mb
