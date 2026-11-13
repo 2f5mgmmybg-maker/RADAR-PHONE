@@ -49,7 +49,15 @@ class CallEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
-Base.metadata.create_all(engine)
+# Database initialization is deliberately non-fatal: keep the web server available
+# even if PostgreSQL is temporarily unavailable during startup.
+@app.on_event("startup")
+def initialize_database():
+    try:
+        Base.metadata.create_all(engine)
+        print("RADAR PHONE database initialized")
+    except Exception as exc:
+        print(f"RADAR PHONE database initialization failed: {exc}")
 
 app = FastAPI(title="RADAR PHONE API", version="0.1.0")
 app.mount("/static", StaticFiles(directory="static"), name="static")
