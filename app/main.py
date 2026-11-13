@@ -1,5 +1,6 @@
 import csv
 import io
+import hmac
 import json
 import os
 import re
@@ -206,7 +207,13 @@ async def incoming_call(payload: dict, db: Session = Depends(get_db)):
 
 @app.websocket("/ws/calls")
 async def calls_socket(websocket: WebSocket):
-    await websocket.accept()
+    expected = os.getenv("RADAR_API_TOKEN", "")
+    offered = websocket.scope.get("subprotocols", [])
+    supplied = offered[1] if len(offered) > 1 and offered[0] == "radar-phone" else ""
+    if not expected or not supplied or not hmac.compare_digest(supplied, expected):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept(subprotocol="radar-phone")
     clients.add(websocket)
     try:
         while True:
