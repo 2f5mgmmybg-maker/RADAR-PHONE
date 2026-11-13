@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import io
 import json
@@ -57,14 +58,19 @@ class CallEvent(Base):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    try:
-        Base.metadata.create_all(engine)
-        print("RADAR PHONE database initialized")
-    except Exception as exc:
-        # Keep /health available so Render can report the web process; DB routes
-        # return a clear error until DATABASE_URL is corrected.
-        print(f"RADAR PHONE database initialization failed: {type(exc).__name__}: {exc}")
+    # Do not wait for PostgreSQL before opening the HTTP port. Render's port
+    # scanner must see Uvicorn listening even if the database is slow/unavailable.
+    async def initialize_database():
+        try:
+            await asyncio.to_thread(Base.metadata.create_all, engine)
+            print("RADAR PHONE database initialized")
+        except Exception as exc:
+            print(f"RADAR PHONE database initialization failed: {type(exc).__name__}: {exc}")
+
+    db_task = asyncio.create_task(initialize_database())
     yield
+    if not db_task.done():
+        db_task.cancel()
 
 
 app = FastAPI(title="RADAR PHONE API", version="0.2.0", lifespan=lifespan)
