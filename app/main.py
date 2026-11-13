@@ -55,8 +55,8 @@ class CallEvent(Base):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Do not wait for PostgreSQL before opening the HTTP port. Render's port
-    # scanner must see Uvicorn listening even if the database is slow/unavailable.
+    # Initialize the local SQLite file in the background so the web server
+    # opens its port immediately and Render's health check can reach it.
     async def initialize_database():
         try:
             await asyncio.to_thread(Base.metadata.create_all, engine)
