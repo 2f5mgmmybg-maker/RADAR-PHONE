@@ -66,7 +66,7 @@ $('import').onclick=async()=>{
  loadCount();
 };
 async function loadCount(){if(!$('token').value)return;try{const r=await fetch('/api/contacts/count',{headers:auth()});if(r.ok){const d=await r.json();$('count').textContent=d.count;}}catch{}}
-function connect(){const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(proto+'://'+location.host+'/ws/calls');ws.onopen=()=>$('connection').textContent='Événements connectés';ws.onclose=()=>{$('connection').textContent='Reconnexion…';setTimeout(connect,2500)};ws.onerror=()=>ws.close();ws.onmessage=e=>{try{showCall(JSON.parse(e.data))}catch{}}}
-$('token').addEventListener('change',loadCount);connect();
+function connect(){const token=$('token').value;if(!token){$('connection').textContent='Jeton requis';return;}const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(proto+'://'+location.host+'/ws/calls',['radar-phone',token]);ws.onopen=()=>$('connection').textContent='Événements connectés';ws.onclose=()=>{$('connection').textContent='Connexion fermée — vérifie le jeton';};ws.onerror=()=>ws.close();ws.onmessage=e=>{try{showCall(JSON.parse(e.data))}catch{}}}
+$('token').addEventListener('change',()=>{loadCount();connect();});
 </script>
 </body></html>
