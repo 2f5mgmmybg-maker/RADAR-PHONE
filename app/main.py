@@ -168,6 +168,16 @@ def parse_rows(filename: str, raw: bytes) -> list[dict[str, Any]]:
         for index, alias in aliases.items():
             if index < width and index != phone_index:
                 headers[index] = alias
+        # Also detect e-mail columns in files that have no header row.
+        email_pattern = re.compile(r"^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
+        email_scores = []
+        for col in range(width):
+            values = [str(row[col]).strip() for row in matrix[:min(100, len(matrix))] if col < len(row) and row[col] is not None]
+            email_scores.append(sum(bool(email_pattern.match(value)) for value in values))
+        if email_scores and max(email_scores) > 0:
+            email_index = max(range(width), key=lambda i: email_scores[i])
+            if email_index != phone_index and email_index not in aliases:
+                headers[email_index] = "email"
         data = matrix
     return [dict(zip(headers, row)) for row in data if any(value is not None for value in row)]
 
