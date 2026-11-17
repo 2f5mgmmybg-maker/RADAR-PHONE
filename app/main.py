@@ -10,19 +10,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, File
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import DateTime, Integer, String, Text, create_engine, select, func
+from sqlalchemy import DateTime, Integer, String, Text, create_engine, select, func, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
-
-# SQLite keeps the database in one file. Render mounts a persistent disk at /var/data.
+ALLOWED_CALL_STATUSES = {"incoming", "answered", "missed", "rejected"}
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./radar_phone_dev.db")
-
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -39,6 +37,7 @@ class Contact(Base):
     phone_digits: Mapped[str] = mapped_column(String(40), index=True)
     first_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     province: Mapped[str | None] = mapped_column(String(160), nullable=True)
     commune: Mapped[str | None] = mapped_column(String(160), nullable=True)
     birth_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -48,29 +47,44 @@ class Contact(Base):
 class CallEvent(Base):
     __tablename__ = "call_events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[str | None] = mapped_column(String(120), nullable=True, unique=True)
     phone: Mapped[str] = mapped_column(String(40), index=True)
     status: Mapped[str] = mapped_column(String(30), default="incoming")
+    contact_snapshot: Mapped[str] = mapped_column(Text, default="{}")
+    source: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize the local SQLite file in the background so the web server
-    # opens its port immediately and Render's health check can reach it.
-    async def initialize_database():
-        try:
-            await asyncio.to_thread(Base.metadata.create_all, engine)
-            print("RADAR PHONE database initialized")
-        except Exception as exc:
-            print(f"RADAR PHONE database initialization failed: {type(exc).__name__}: {exc}")
+    def initialize_database():
+        Base.metadata.create_all(engine)
+        # Small additive migration for databases created by the previous prototype.
+        with engine.begin() as conn:
+            columns = {item["name"] for item in inspect(engine).get_columns("contacts")}
+            if "email" not in columns:
+                conn.execute(text("ALTER TABLE contacts ADD COLUMN email VARCHAR(320)"))
+            call_columns = {item["name"] for item in inspect(engine).get_columns("call_events")}
+            additions = {
+                "event_id": "VARCHAR(120)",
+                "contact_snapshot": "TEXT DEFAULT '{}'",
+                "source": "VARCHAR(80)",
+                "duration_seconds": "INTEGER",
+            }
+            for name, sql_type in additions.items():
+                if name not in call_columns:
+                    conn.execute(text(f"ALTER TABLE call_events ADD COLUMN {name} {sql_type}"))
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_call_events_event_id ON call_events (event_id)"))
+        print("RADAR PHONE database initialized")
 
-    db_task = asyncio.create_task(initialize_database())
+    task = asyncio.create_task(asyncio.to_thread(initialize_database))
     yield
-    if not db_task.done():
-        db_task.cancel()
+    if not task.done():
+        task.cancel()
 
 
-app = FastAPI(title="RADAR PHONE API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="RADAR PHONE API", version="1.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 clients: set[WebSocket] = set()
 
@@ -87,9 +101,9 @@ def require_token(authorization: str | None = Header(default=None)):
     expected = os.getenv("RADAR_API_TOKEN", "")
     supplied = authorization.removeprefix("Bearer ").strip() if authorization else ""
     if not expected:
-        raise HTTPException(status_code=503, detail="RADAR_API_TOKEN is not configured")
+        raise HTTPException(status_code=503, detail="RADAR_API_TOKEN n'est pas configuré")
     if not supplied or not hmac.compare_digest(supplied, expected):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Jeton invalide")
 
 
 def digits(value: str) -> str:
@@ -101,16 +115,16 @@ def norm_header(value: Any) -> str:
 
 
 def find_column(headers: list[str], terms: tuple[str, ...]) -> str | None:
-    normalized = {norm_header(h): h for h in headers}
-    for key, original in normalized.items():
+    for original in headers:
+        key = norm_header(original)
         if any(term in key for term in terms):
             return original
     return None
 
 
 def looks_like_phone(value: Any) -> bool:
-    d = digits(str(value or ""))
-    return 6 <= len(d) <= 16
+    number = digits(str(value or ""))
+    return 6 <= len(number) <= 16
 
 
 def parse_rows(filename: str, raw: bytes) -> list[dict[str, Any]]:
@@ -128,37 +142,34 @@ def parse_rows(filename: str, raw: bytes) -> list[dict[str, Any]]:
         matrix = list(workbook.active.iter_rows(values_only=True))
         workbook.close()
     else:
-        raise HTTPException(status_code=415, detail="Formats acceptés : CSV ou XLSX")
+        raise HTTPException(status_code=415, detail="Formats acceptés : CSV, XLSX ou XLSM")
+
     matrix = [list(row) for row in matrix if row and any(v is not None and str(v).strip() for v in row)]
     if not matrix:
         return []
-
     first = [str(v or "").strip() for v in matrix[0]]
     phone_header = find_column(first, ("phone", "mobile", "telephone", "tel", "gsm", "numero"))
     if phone_header:
         headers = [str(v or "").strip() or f"column_{i+1}" for i, v in enumerate(matrix[0])]
         data = matrix[1:]
     else:
-        # Headerless spreadsheets are supported: inspect the first rows to
-        # identify the column that most consistently contains phone numbers.
-        width = max(len(r) for r in matrix)
+        width = max(len(row) for row in matrix)
         scores = []
         for col in range(width):
-            vals = [r[col] if col < len(r) else None for r in matrix[: min(30, len(matrix))]]
-            scores.append(sum(looks_like_phone(v) for v in vals))
+            values = [row[col] if col < len(row) else None for row in matrix[:min(30, len(matrix))]]
+            scores.append(sum(looks_like_phone(value) for value in values))
         phone_index = max(range(width), key=lambda i: scores[i])
         if scores[phone_index] == 0:
-            raise HTTPException(status_code=400, detail="Aucune colonne de numéro de téléphone détectée")
+            raise HTTPException(status_code=400, detail="Aucune colonne de téléphone détectée")
         headers = [f"column_{i+1}" for i in range(width)]
         headers[phone_index] = "phone"
-        # Conventional no-header order when present: genre, nom, prénom,
-        # téléphone, province, commune, date de naissance.
+        # Format sans en-tête historique : genre, nom, prénom, téléphone, province, commune, naissance.
         aliases = {1: "last_name", 2: "first_name", 4: "province", 5: "commune", 6: "birth_date"}
-        for idx, alias in aliases.items():
-            if idx < width and idx != phone_index:
-                headers[idx] = alias
+        for index, alias in aliases.items():
+            if index < width and index != phone_index:
+                headers[index] = alias
         data = matrix
-    return [dict(zip(headers, row)) for row in data if any(v is not None for v in row)]
+    return [dict(zip(headers, row)) for row in data if any(value is not None for value in row)]
 
 
 def text_value(row: dict, key: str | None) -> str | None:
@@ -168,14 +179,46 @@ def text_value(row: dict, key: str | None) -> str | None:
     return str(value).strip() if value is not None and str(value).strip() else None
 
 
+def contact_data(contact: Contact) -> dict[str, Any]:
+    return {
+        "first_name": contact.first_name,
+        "last_name": contact.last_name,
+        "phone": contact.phone,
+        "email": contact.email,
+        "province": contact.province,
+        "commune": contact.commune,
+        "birth_date": contact.birth_date,
+        "extra": json.loads(contact.extra_json or "{}"),
+    }
+
+
+def match_contact(db: Session, phone: str):
+    normalized = digits(phone)
+    if not normalized:
+        return None
+    contact = db.scalar(select(Contact).where(Contact.phone_digits == normalized).limit(1))
+    return contact_data(contact) if contact else None
+
+
 def db_error(exc: Exception):
     print(f"RADAR PHONE database error: {type(exc).__name__}: {exc}")
-    raise HTTPException(status_code=503, detail="Base de données indisponible. Vérifie DATABASE_URL sur Render.")
+    raise HTTPException(status_code=503, detail="Base de données indisponible. Vérifie la configuration Render.")
+
+
+async def broadcast(payload: dict):
+    dead = []
+    for ws in list(clients):
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        clients.discard(ws)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "RADAR PHONE"}
+    return {"status": "ok", "service": "RADAR PHONE", "version": "1.0.0"}
 
 
 @app.get("/")
@@ -205,9 +248,11 @@ async def import_contacts(file: UploadFile = File(...), db: Session = Depends(ge
         raise HTTPException(status_code=400, detail="Colonne téléphone introuvable")
     first_col = find_column(headers, ("firstname", "prenom", "givenname"))
     last_col = find_column(headers, ("lastname", "nom", "surname", "familyname"))
+    email_col = find_column(headers, ("email", "courriel", "mail", "adresseelectronique"))
     province_col = find_column(headers, ("province", "region", "departement"))
     commune_col = find_column(headers, ("commune", "city", "ville", "localite"))
     birth_col = find_column(headers, ("birthdate", "dateofbirth", "datenaissance", "naissance"))
+    mapped = {phone_col, first_col, last_col, email_col, province_col, commune_col, birth_col}
     inserted = updated = skipped = 0
     try:
         for row in rows:
@@ -217,12 +262,17 @@ async def import_contacts(file: UploadFile = File(...), db: Session = Depends(ge
                 skipped += 1
                 continue
             existing = db.scalar(select(Contact).where(Contact.phone_digits == normalized).limit(1))
-            known = {phone_col, first_col, last_col, province_col, commune_col, birth_col}
-            extra = {str(k): str(v) for k, v in row.items() if k not in known and v is not None}
-            values = dict(phone=phone, phone_digits=normalized,
-                first_name=text_value(row, first_col), last_name=text_value(row, last_col),
-                province=text_value(row, province_col), commune=text_value(row, commune_col),
-                birth_date=text_value(row, birth_col), extra_json=json.dumps(extra, ensure_ascii=False))
+            extra = {str(key): str(value) for key, value in row.items() if key not in mapped and value is not None}
+            values = {
+                "phone": phone, "phone_digits": normalized,
+                "first_name": text_value(row, first_col),
+                "last_name": text_value(row, last_col),
+                "email": text_value(row, email_col),
+                "province": text_value(row, province_col),
+                "commune": text_value(row, commune_col),
+                "birth_date": text_value(row, birth_col),
+                "extra_json": json.dumps(extra, ensure_ascii=False),
+            }
             if existing:
                 for key, value in values.items():
                     setattr(existing, key, value)
@@ -237,41 +287,43 @@ async def import_contacts(file: UploadFile = File(...), db: Session = Depends(ge
     return {"imported": inserted, "updated": updated, "skipped": skipped, "folder": "Dossier contacts"}
 
 
-def match_contact(db: Session, phone: str):
-    normalized = digits(phone)
-    if not normalized:
-        return None
-    contact = db.scalar(select(Contact).where(Contact.phone_digits == normalized).limit(1))
-    if not contact:
-        return None
-    return {
-        "first_name": contact.first_name, "last_name": contact.last_name,
-        "phone": contact.phone, "province": contact.province, "commune": contact.commune,
-        "birth_date": contact.birth_date, "extra": json.loads(contact.extra_json or "{}")
-    }
-
-
-async def broadcast(payload: dict):
-    dead = []
-    for ws in list(clients):
-        try:
-            await ws.send_json(payload)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        clients.discard(ws)
-
-
+@app.post("/api/calls/events", dependencies=[Depends(require_token)])
 @app.post("/api/calls/incoming", dependencies=[Depends(require_token)])
-async def incoming_call(payload: dict, db: Session = Depends(get_db)):
+async def record_call(payload: dict, db: Session = Depends(get_db)):
     phone = str(payload.get("phone", "")).strip()
     if not 6 <= len(digits(phone)) <= 16:
         raise HTTPException(status_code=400, detail="Numéro de téléphone invalide")
+    status = str(payload.get("status", "incoming")).lower().strip()
+    if status not in ALLOWED_CALL_STATUSES:
+        raise HTTPException(status_code=400, detail="Statut accepté : incoming, answered, missed ou rejected")
+    event_id = str(payload.get("event_id") or "").strip() or None
+    source = str(payload.get("source") or "manual-api")[:80]
+    duration = payload.get("duration_seconds")
     try:
-        event = CallEvent(phone=phone, status="incoming")
+        if event_id:
+            existing = db.scalar(select(CallEvent).where(CallEvent.event_id == event_id).limit(1))
+            if existing:
+                return {
+                    "id": existing.id, "phone": existing.phone, "status": existing.status,
+                    "created_at": existing.created_at.isoformat(),
+                    "contact": json.loads(existing.contact_snapshot or "{}") or None,
+                    "duplicate": True,
+                }
+        contact = match_contact(db, phone)
+        event = CallEvent(
+            event_id=event_id, phone=phone, status=status,
+            contact_snapshot=json.dumps(contact or {}, ensure_ascii=False),
+            source=source,
+            duration_seconds=int(duration) if duration is not None and str(duration).isdigit() else None,
+        )
         db.add(event)
         db.commit()
-        result = {"type": "incoming_call", "phone": phone, "contact": match_contact(db, phone)}
+        db.refresh(event)
+        result = {
+            "id": event.id, "type": "call_event", "phone": phone, "status": status,
+            "created_at": event.created_at.isoformat(), "duration_seconds": event.duration_seconds,
+            "contact": contact, "duplicate": False,
+        }
     except Exception as exc:
         db.rollback()
         db_error(exc)
@@ -280,10 +332,18 @@ async def incoming_call(payload: dict, db: Session = Depends(get_db)):
 
 
 @app.get("/api/calls/history", dependencies=[Depends(require_token)])
-def calls_history(limit: int = 50, db: Session = Depends(get_db)):
+def calls_history(limit: int = 100, db: Session = Depends(get_db)):
     try:
-        events = db.scalars(select(CallEvent).order_by(CallEvent.id.desc()).limit(max(1, min(limit, 200)))).all()
-        return [{"phone": e.phone, "status": e.status, "created_at": e.created_at.isoformat()} for e in events]
+        events = db.scalars(select(CallEvent).order_by(CallEvent.id.desc()).limit(max(1, min(limit, 500)))).all()
+        output = []
+        for event in events:
+            output.append({
+                "id": event.id, "phone": event.phone, "status": event.status,
+                "created_at": event.created_at.isoformat(),
+                "duration_seconds": event.duration_seconds,
+                "contact": json.loads(event.contact_snapshot or "{}") or None,
+            })
+        return output
     except Exception as exc:
         db_error(exc)
 
